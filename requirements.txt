@@ -2,7 +2,7 @@ langchain
 PyPDF2
 python-dotenv
 streamlit
-openai
+groq
 faiss-cpu
 altair
 tiktoken
