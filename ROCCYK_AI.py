@@ -1,25 +1,27 @@
 import os
 import streamlit as st
-import openai
+from groq import Groq
 from dotenv import load_dotenv
 
 load_dotenv()
-openai.api_key = os.environ.get('OPENAI_API_KEY')
+
+client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
 def stream_llm_response():
     response_message = ""
 
-    for chunk in openai.chat.completions.create(
-        model="gpt-4o",
+    for chunk in client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
         messages=[
-            {"role": "system", "content": os.environ.get('BIO')
-},
+            {"role": "system", "content": os.environ.get("BIO")},
             *st.session_state.chat_history
         ],
         stream=True,
     ):
-        response_message += chunk.choices[0].delta.content if chunk.choices[0].delta.content else ""
-        yield chunk.choices[0].delta.content if chunk.choices[0].delta.content else ""
+        delta = chunk.choices[0].delta.content or ""
+        response_message += delta
+        yield delta
+
     st.session_state.chat_history.append({"role": "assistant", "content": response_message})
 
 # configuring streamlit page settings
@@ -41,7 +43,6 @@ for message in st.session_state.chat_history:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-
 # input field for user's message
 user_prompt = st.chat_input("Ask Questions About Rhichard")
 
@@ -50,6 +51,6 @@ if user_prompt:
     st.chat_message("user").markdown(user_prompt)
     st.session_state.chat_history.append({"role": "user", "content": user_prompt})
 
-    # display GPT-4o's response
+    # display Groq's response
     with st.chat_message("assistant"):
         st.write_stream(stream_llm_response())
