@@ -27,7 +27,7 @@ def stream_llm_response():
 # configuring streamlit page settings
 st.set_page_config(
     page_title="ROCCYK AI",
-    page_icon=":robot_face:",
+    page_icon="🤖",
     layout="centered"
 )
 
@@ -36,7 +36,7 @@ if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
 # streamlit page title
-st.title("ROCCYK AI :robot_face:")
+st.title("ROCCYK AI 🤖")
 
 # display chat history
 for message in st.session_state.chat_history:
