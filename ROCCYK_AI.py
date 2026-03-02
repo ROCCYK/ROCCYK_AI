@@ -1,42 +1,189 @@
 import os
+
+import faiss
+import numpy as np
 import streamlit as st
-from groq import Groq
 from dotenv import load_dotenv
+from groq import Groq
+from sentence_transformers import SentenceTransformer
 
 load_dotenv()
 
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
-def stream_llm_response():
+# Tunables
+EMBED_MODEL = "all-MiniLM-L6-v2"
+CHUNK_SIZE = 500
+CHUNK_OVERLAP = 100
+TOP_K = 4
+SIMILARITY_THRESHOLD = 0.2
+MAX_CONTEXT_CHARS = 1400
+MAX_HISTORY_MESSAGES = 8
+MAX_HISTORY_MESSAGE_CHARS = 500
+MAX_OUTPUT_TOKENS = 220
+
+
+def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP):
+    """Split long text into overlapping chunks for retrieval."""
+    text = (text or "").strip()
+    if not text:
+        return []
+
+    chunks = []
+    start = 0
+    text_len = len(text)
+
+    while start < text_len:
+        end = min(start + chunk_size, text_len)
+        chunks.append(text[start:end])
+        if end == text_len:
+            break
+        start = max(0, end - overlap)
+
+    return chunks
+
+
+@st.cache_resource(show_spinner=False)
+def build_rag_index(bio_text: str):
+    """Build and cache embeddings + FAISS index for the BIO source text."""
+    chunks = chunk_text(bio_text)
+    if not chunks:
+        return None, None, []
+
+    embedder = SentenceTransformer(EMBED_MODEL)
+    embeddings = embedder.encode(chunks, convert_to_numpy=True, show_progress_bar=False)
+    embeddings = np.asarray(embeddings, dtype=np.float32)
+
+    index = faiss.IndexFlatIP(embeddings.shape[1])
+    faiss.normalize_L2(embeddings)
+    index.add(embeddings)
+
+    return embedder, index, chunks
+
+
+def retrieve_context(query: str, embedder, index, chunks, top_k: int = TOP_K):
+    """Retrieve top-k semantically similar chunks for the current query."""
+    if not query or embedder is None or index is None or not chunks:
+        return []
+
+    q_emb = embedder.encode([query], convert_to_numpy=True, show_progress_bar=False)
+    q_emb = np.asarray(q_emb, dtype=np.float32)
+    faiss.normalize_L2(q_emb)
+
+    k = min(top_k, len(chunks))
+    scores, indices = index.search(q_emb, k)
+
+    selected = []
+    for score, idx in zip(scores[0], indices[0]):
+        if score < SIMILARITY_THRESHOLD:
+            continue
+        if 0 <= idx < len(chunks):
+            selected.append(chunks[idx])
+
+    return selected
+
+
+def build_context_window(chunks, max_chars: int = MAX_CONTEXT_CHARS):
+    """Pack retrieved chunks into a strict character budget."""
+    selected = []
+    used = 0
+    seen = set()
+
+    for chunk in chunks:
+        normalized = " ".join(chunk.split())
+        if normalized in seen:
+            continue
+        if used + len(chunk) > max_chars:
+            break
+        selected.append(chunk)
+        seen.add(normalized)
+        used += len(chunk)
+
+    return "\n\n".join(selected)
+
+
+def compact_history(messages, max_messages: int = MAX_HISTORY_MESSAGES):
+    """Keep only recent turns and cap individual message length."""
+    compacted = []
+    for msg in messages[-max_messages:]:
+        content = (msg.get("content") or "").strip()
+        if len(content) > MAX_HISTORY_MESSAGE_CHARS:
+            content = content[:MAX_HISTORY_MESSAGE_CHARS].rstrip() + " ..."
+        compacted.append({"role": msg.get("role", "user"), "content": content})
+    return compacted
+
+
+def normalize_query(text: str):
+    return " ".join((text or "").strip().lower().split())
+
+
+def stream_llm_response(user_prompt: str):
     response_message = ""
+    prompt_key = normalize_query(user_prompt)
+
+    # Avoid another model call for repeated identical questions in-session.
+    if prompt_key in st.session_state.answer_cache:
+        cached = st.session_state.answer_cache[prompt_key]
+        st.session_state.chat_history.append({"role": "assistant", "content": cached})
+        yield cached
+        return
+
+    embedder, index, chunks = st.session_state.rag
+    retrieved_chunks = retrieve_context(user_prompt, embedder, index, chunks)
+    retrieved_context = build_context_window(retrieved_chunks)
+
+    system_prompt = (
+        "You are ROCCYK AI. Use the retrieved context about Rhichard as your primary source. "
+        "If the answer is not in context, say you are not sure and ask for more details."
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {
+            "role": "system",
+            "content": f"Retrieved context:\n{retrieved_context}" if retrieved_context else "Retrieved context: (none)",
+        },
+        *compact_history(st.session_state.chat_history),
+    ]
 
     for chunk in client.chat.completions.create(
         model="llama-3.3-70b-versatile",
-        messages=[
-            {"role": "system", "content": os.environ.get("BIO")},
-            *st.session_state.chat_history
-        ],
+        messages=messages,
+        max_tokens=MAX_OUTPUT_TOKENS,
         stream=True,
     ):
         delta = chunk.choices[0].delta.content or ""
         response_message += delta
         yield delta
 
+    st.session_state.answer_cache[prompt_key] = response_message
     st.session_state.chat_history.append({"role": "assistant", "content": response_message})
+
 
 # configuring streamlit page settings
 st.set_page_config(
     page_title="ROCCYK AI",
-    page_icon="🤖",
+    page_icon=":robot_face:",
     layout="centered"
 )
+
+bio_text = os.environ.get("BIO", "")
+if not bio_text.strip():
+    st.error("BIO is empty. Add your biography to the BIO environment variable.")
+    st.stop()
 
 # initialize chat session in streamlit if not already present
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
+if "rag" not in st.session_state:
+    st.session_state.rag = build_rag_index(bio_text)
+
+if "answer_cache" not in st.session_state:
+    st.session_state.answer_cache = {}
+
 # streamlit page title
-st.title("ROCCYK AI 🤖")
+st.title("ROCCYK AI")
 
 # display chat history
 for message in st.session_state.chat_history:
@@ -53,4 +200,4 @@ if user_prompt:
 
     # display Groq's response
     with st.chat_message("assistant"):
-        st.write_stream(stream_llm_response())
+        st.write_stream(stream_llm_response(user_prompt))
