@@ -74,13 +74,18 @@ def retrieve_context(query: str, embedder, index, chunks, top_k: int = TOP_K):
     scores, indices = index.search(q_emb, k)
 
     selected = []
+    fallback = []
     for score, idx in zip(scores[0], indices[0]):
+        if 0 <= idx < len(chunks):
+            fallback.append(chunks[idx])
         if score < SIMILARITY_THRESHOLD:
             continue
         if 0 <= idx < len(chunks):
             selected.append(chunks[idx])
 
-    return selected
+    # Keep retrieval robust for larger chunks or stricter thresholds.
+    # If no chunk clears the threshold, still pass the best semantic matches.
+    return selected if selected else fallback
 
 
 def build_context_window(chunks, max_chars: int = MAX_CONTEXT_CHARS):
