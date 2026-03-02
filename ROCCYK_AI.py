@@ -20,7 +20,7 @@ SIMILARITY_THRESHOLD = 0.2
 MAX_CONTEXT_CHARS = 1400
 MAX_HISTORY_MESSAGES = 8
 MAX_HISTORY_MESSAGE_CHARS = 500
-MAX_OUTPUT_TOKENS = 220
+MAX_OUTPUT_TOKENS = 700
 
 
 def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP):
@@ -134,7 +134,9 @@ def stream_llm_response(user_prompt: str):
 
     system_prompt = (
         "You are ROCCYK AI. Use the retrieved context about Rhichard as your primary source. "
-        "If the answer is not in context, say you are not sure and ask for more details."
+        "If the answer is not in context, say you are not sure and ask for more details. "
+        "Do not start responses with phrases like 'Based on the context'. "
+        "Answer directly and naturally."
     )
 
     messages = [
