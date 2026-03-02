@@ -1,4 +1,5 @@
 import os
+import hashlib
 
 import faiss
 import numpy as np
@@ -13,11 +14,11 @@ client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
 # Tunables
 EMBED_MODEL = "all-MiniLM-L6-v2"
-CHUNK_SIZE = 1000
-CHUNK_OVERLAP = 500
+CHUNK_SIZE = 600
+CHUNK_OVERLAP = 120
 TOP_K = 10
-SIMILARITY_THRESHOLD = 0.5
-MAX_CONTEXT_CHARS = 2000
+SIMILARITY_THRESHOLD = 0.35
+MAX_CONTEXT_CHARS = 6000
 MAX_HISTORY_MESSAGES = 16
 MAX_HISTORY_MESSAGE_CHARS = 1000
 MAX_OUTPUT_TOKENS = 1000
@@ -122,6 +123,21 @@ def normalize_query(text: str):
     return " ".join((text or "").strip().lower().split())
 
 
+def build_config_signature(bio_text: str):
+    payload = "|".join(
+        [
+            EMBED_MODEL,
+            str(CHUNK_SIZE),
+            str(CHUNK_OVERLAP),
+            str(TOP_K),
+            str(SIMILARITY_THRESHOLD),
+            str(MAX_CONTEXT_CHARS),
+            hashlib.sha256((bio_text or "").encode("utf-8")).hexdigest(),
+        ]
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def stream_llm_response(user_prompt: str):
     response_message = ""
     prompt_key = normalize_query(user_prompt)
@@ -141,6 +157,7 @@ def stream_llm_response(user_prompt: str):
         "You are ROCCYK AI. Use the retrieved context about Rhichard as your primary source. "
         "If the answer is not in context, say you are not sure and ask for more details. "
         "Do not start responses with phrases like 'Based on the context'. "
+        "When education is relevant, include the highest degree explicitly if present in context. "
         "Answer directly and naturally."
     )
 
@@ -188,6 +205,12 @@ if "rag" not in st.session_state:
 
 if "answer_cache" not in st.session_state:
     st.session_state.answer_cache = {}
+
+current_signature = build_config_signature(bio_text)
+if st.session_state.get("config_signature") != current_signature:
+    st.session_state.rag = build_rag_index(bio_text)
+    st.session_state.answer_cache = {}
+    st.session_state.config_signature = current_signature
 
 # streamlit page title
 st.title("ROCCYK AI")
