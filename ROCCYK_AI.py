@@ -9,7 +9,7 @@ client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 st.set_page_config(
     page_title="ROCCYK AI",
-    page_icon=":robot_face:",
+    page_icon="🤖",
     layout="centered",
 )
 
