@@ -49,52 +49,68 @@ if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
 
+@st.cache_resource
+def get_shared_response_cache():
+    return {}
+
+
 def get_cached_key(question: str) -> str:
     normalized = " ".join((question or "").strip().lower().split())
-    return hashlib.md5(normalized.encode()).hexdigest()
+    payload = f"{MODEL_NAME}|{BIO_HASH}|{system_prompt}|{normalized}"
+    return hashlib.md5(payload.encode()).hexdigest()
 
 
-@st.cache_data(ttl=86400, max_entries=1000, show_spinner=False)
-def cached_completion(question: str, prompt_hash: str) -> str:
-    chat_completion = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    f"{system_prompt}\n\n"
-                    f"Here is the full biography:\n\n{BIOGRAPHY}"
-                ),
-            },
-            {"role": "user", "content": question},
-        ],
-        temperature=0.3,
-        max_tokens=1024,
-    )
-    return chat_completion.choices[0].message.content
+def stream_text(text: str, chunk_size: int = 12):
+    for i in range(0, len(text), chunk_size):
+        yield text[i:i + chunk_size]
 
 
-def query_bio(question: str):
+def stream_bio_answer(question: str):
     canonical_question = " ".join((question or "").strip().split())
     cache_key = get_cached_key(canonical_question)
+    shared_cache = get_shared_response_cache()
 
     if cache_key in st.session_state.response_cache:
-        return st.session_state.response_cache[cache_key]
+        yield from stream_text(st.session_state.response_cache[cache_key])
+        return
+    if cache_key in shared_cache:
+        answer = shared_cache[cache_key]
+        st.session_state.response_cache[cache_key] = answer
+        yield from stream_text(answer)
+        return
 
     try:
-        # Shared cache invalidates automatically when model/prompt/bio changes.
-        prompt_hash = hashlib.sha256(
-            f"{MODEL_NAME}|{system_prompt}|{BIO_HASH}".encode("utf-8")
-        ).hexdigest()
-        answer = cached_completion(canonical_question, prompt_hash)
+        answer = ""
+        for chunk in client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        f"{system_prompt}\n\n"
+                        f"Here is the full biography:\n\n{BIOGRAPHY}"
+                    ),
+                },
+                {"role": "user", "content": canonical_question},
+            ],
+            temperature=0.3,
+            max_tokens=1024,
+            stream=True,
+        ):
+            delta = chunk.choices[0].delta.content or ""
+            answer += delta
+            if delta:
+                yield delta
 
+        shared_cache[cache_key] = answer
         st.session_state.response_cache[cache_key] = answer
-        return answer
 
     except Exception as e:
         if "429" in str(e):
-            return "Rate limit hit — please wait 30 seconds and try again."
-        return f"Error: {str(e)}"
+            yield "Rate limit hit — please wait 30 seconds and try again."
+            return
+        yield f"Error: {str(e)}"
+        return
 
 
 # Streamlit UI
@@ -110,8 +126,6 @@ if question:
     st.session_state.chat_history.append({"role": "user", "content": question})
 
     with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
-            answer = query_bio(question)
-        st.markdown(answer)
+        answer = st.write_stream(stream_bio_answer(question))
 
     st.session_state.chat_history.append({"role": "assistant", "content": answer})
