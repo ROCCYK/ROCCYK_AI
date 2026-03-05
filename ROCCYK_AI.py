@@ -151,7 +151,7 @@ def stream_bio_answer(question: str):
 
 
 # Streamlit UI
-st.title("ROCCYK AI")
+st.title("ROCCYK AI 🤖")
 
 with st.sidebar:
     st.caption("Session controls")
