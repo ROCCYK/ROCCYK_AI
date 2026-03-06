@@ -173,6 +173,7 @@ if question:
     st.session_state.chat_history.append({"role": "user", "content": question})
 
     with st.chat_message("assistant"):
-        answer = st.write_stream(stream_bio_answer(question))
+        with st.spinner("Thinking..."):
+            answer = st.write_stream(stream_bio_answer(question))
 
     st.session_state.chat_history.append({"role": "assistant", "content": answer})
