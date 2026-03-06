@@ -1,4 +1,5 @@
-﻿import hashlib
+import hashlib
+import json
 import time
 
 import streamlit as st
@@ -23,6 +24,7 @@ BIO_HASH = hashlib.sha256(BIOGRAPHY.encode("utf-8")).hexdigest()
 CACHE_TTL_SECONDS = 24 * 60 * 60
 CACHE_MAX_ENTRIES = 1000
 MAX_QUESTION_CHARS = 1200
+MAX_PRIOR_TURNS = 50
 
 system_prompt = (
     "You are ROCCYK AI, a personal assistant that knows Rhichard's life story inside and out. "
@@ -65,9 +67,10 @@ def normalize_question(question: str) -> str:
     return " ".join((question or "").strip().split())[:MAX_QUESTION_CHARS]
 
 
-def get_cached_key(question: str) -> str:
+def get_cached_key(question: str, prior_messages=None) -> str:
     normalized = normalize_question(question).lower()
-    payload = f"{PROMPT_SIGNATURE}|{normalized}"
+    history_payload = json.dumps(prior_messages or [], separators=(",", ":"), ensure_ascii=True)
+    payload = f"{PROMPT_SIGNATURE}|{history_payload}|{normalized}"
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
@@ -103,13 +106,34 @@ def stream_text(text: str, chunk_size: int = 12):
         yield text[i : i + chunk_size]
 
 
+def get_recent_chat_messages(current_question: str):
+    history = st.session_state.get("chat_history", [])
+    candidate_history = history
+
+    # The current user message is appended before streaming; avoid duplicating it.
+    if history and history[-1].get("role") == "user":
+        last_user = normalize_question(history[-1].get("content", ""))
+        if last_user == normalize_question(current_question):
+            candidate_history = history[:-1]
+
+    filtered = []
+    for message in candidate_history:
+        role = message.get("role")
+        content = message.get("content")
+        if role in {"user", "assistant"} and isinstance(content, str) and content.strip():
+            filtered.append({"role": role, "content": content})
+
+    return filtered[-(MAX_PRIOR_TURNS * 2) :]
+
+
 def stream_bio_answer(question: str):
     canonical_question = normalize_question(question)
     if not canonical_question:
         yield "Please ask a question about Rhichard."
         return
 
-    cache_key = get_cached_key(canonical_question)
+    recent_history = get_recent_chat_messages(canonical_question)
+    cache_key = get_cached_key(canonical_question, recent_history)
     shared_cache = get_shared_response_cache()
 
     session_hit = _cache_get(st.session_state.response_cache, cache_key)
@@ -129,6 +153,7 @@ def stream_bio_answer(question: str):
             model=MODEL_NAME,
             messages=[
                 {"role": "system", "content": SYSTEM_CONTEXT},
+                *recent_history,
                 {"role": "user", "content": canonical_question},
             ],
             temperature=0.3,
